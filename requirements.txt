@@ -1,0 +1,4 @@
+numpy==1.25
+gtsam==4.2
+pandas
+plotly
