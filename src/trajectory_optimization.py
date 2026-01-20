@@ -36,14 +36,12 @@ from src.trajectory_optimization import (
     cost_function_gimbal_lock,
     cost_function_tuned,
     dynamics_constraints_robust,
-    boundary_constraints_robust
+    boundary_constraints_robust,
+    collision_constraints_optimized,
+    initialize_from_rrt_robust
 )
 from src import helpers_obstacles as helpers
 
-
-# =============================================================================
-# RRT Tests (TODO 1-5)
-# =============================================================================
 class TestRRT(unittest.TestCase):
     """Tests for RRT functions."""
 
@@ -113,10 +111,6 @@ class TestRRT(unittest.TestCase):
         # First parent should be -1 (root)
         self.assertEqual(parents[0], -1)
 
-
-# =============================================================================
-# Drone Dynamics Tests (TODO 6-8)
-# =============================================================================
 class TestDroneDynamics(unittest.TestCase):
     """Tests for drone dynamics functions."""
 
@@ -161,10 +155,6 @@ class TestDroneDynamics(unittest.TestCase):
 
         self.assertTrue(np.allclose(actual_terminal_velocity, expected_terminal_velocity, atol=1e-2))
 
-
-# =============================================================================
-# Steering with Terminal Velocity Tests (TODO 9-11)
-# =============================================================================
 class TestSteeringWithTerminalVelocity(unittest.TestCase):
     """Tests for pose-based steering functions."""
 
@@ -248,7 +238,6 @@ class TestSteeringWithTerminalVelocity(unittest.TestCase):
         self.assertTrue(actual_nearest_node.equals(expected_nearest_node, tol=1e-1))
         self.assertEqual(actual_index, expected_index)
 
-    # TODO 11 Test
     def test_steer_with_terminal_velocity(self):
         """Test steering with terminal velocity dynamics."""
         current_node = gtsam.Pose3(
@@ -272,9 +261,6 @@ class TestSteeringWithTerminalVelocity(unittest.TestCase):
         self.assertTrue(actual_steer_node.equals(expected_steer_node, tol=1e-1))
 
 
-# =============================================================================
-# Realistic Steer Tests (TODO 12-13)
-# =============================================================================
 class TestRealisticSteer(unittest.TestCase):
     """Tests for realistic steering with gravity."""
 
@@ -315,10 +301,6 @@ class TestRealisticSteer(unittest.TestCase):
 
         self.assertTrue(actual_steer_node.equals(expected_steer_node, tol=1e-2))
 
-
-# =============================================================================
-# Drone Racing & Obstacle Avoidance Tests (TODO 14-16)
-# =============================================================================
 class TestDroneRacingAndObstacles(unittest.TestCase):
     """Tests for drone racing and obstacle avoidance functions."""
 
@@ -357,7 +339,6 @@ class TestDroneRacingAndObstacles(unittest.TestCase):
         self.assertGreater(len(rrt), 1)
         self.assertEqual(len(rrt), len(parents))
 
-    # TODO 15 Test (with obstacles)
     def test_run_rrt_with_obstacles_avoids_collision(self):
         """Test RRT avoids obstacles."""
         start = gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(2, 2, 5))
@@ -387,7 +368,6 @@ class TestDroneRacingAndObstacles(unittest.TestCase):
         has_collision, _ = helpers.check_path_collision(path, obstacles)
         self.assertFalse(has_collision)
 
-    # TODO 16 Test
     def test_drone_racing_rrt_with_obstacles(self):
         """Test drone racing through hoops while avoiding obstacles."""
         start = gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(1, 2, 3))
@@ -408,10 +388,6 @@ class TestDroneRacingAndObstacles(unittest.TestCase):
         has_collision, _ = helpers.check_path_collision(path, obstacles)
         self.assertFalse(has_collision)
 
-
-# =============================================================================
-# Trajectory Optimization Helper Tests (TODO 17+)
-# =============================================================================
 class TestTrajOptHelpers(unittest.TestCase):
     """Test angle wrapping, packing, and unpacking functions."""
 
@@ -509,10 +485,6 @@ class TestTrajOptHelpers(unittest.TestCase):
         self.assertTrue(np.allclose(states, states_recovered))
         self.assertTrue(np.allclose(controls, controls_recovered))
 
-
-# =============================================================================
-# Trajectory Cost Function Tests (TODO 20-24)
-# =============================================================================
 class TestCostFunctions(unittest.TestCase):
     """Test all cost functions for trajectory optimization."""
 
@@ -593,7 +565,6 @@ class TestCostFunctions(unittest.TestCase):
         # Cost = 5.0 * (0.1^2 + 0.1^2 + 0.1^2 + 2^2) = 5.0 * 4.03 = 20.15
         self.assertAlmostEqual(cost, 20.15, places=6)
 
-    # TODO 23 Test
     def test_cost_function_gimbal_lock_safe(self):
         """Test gimbal lock penalty in safe range."""
         N = 2
@@ -618,13 +589,8 @@ class TestCostFunctions(unittest.TestCase):
         controls = np.zeros((N, 4))
 
         cost = cost_function_gimbal_lock(states, controls, N)
-        # Two states exceed limit
-        # Excess for pitch=1.0: 1.0 - 0.873 = 0.127
-        # Cost per violation: 1000 * 0.127^2 ≈ 16.13
-        # Total: 2 * 16.13 ≈ 32.26
         self.assertTrue(cost > 30.0)  # Should have significant penalty
 
-    # TODO 24 Test
     def test_cost_function_integration(self):
         """Test integrated cost function combines all costs."""
         N = 2
@@ -695,7 +661,6 @@ class TestConstraints(unittest.TestCase):
         # But they should exist (we're testing the function runs)
         self.assertTrue(isinstance(violations, np.ndarray))
 
-    # TODO 26 Tests
     def test_boundary_constraints_start(self):
         """Test boundary constraints enforce start pose."""
         N = 2
@@ -778,6 +743,100 @@ class TestConstraints(unittest.TestCase):
         hoop3 = gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(4, 4, 4))
         violations = boundary_constraints_robust(z, N, start_pose, goal_position, [hoop1, hoop2, hoop3])
         self.assertEqual(violations.shape[0], 18)  # 6 + 3 + 9
+
+class TestCollisionAndInitialization(unittest.TestCase):
+    """Test collision constraints and RRT initialization."""
+
+    # TODO 27 Test
+    def test_collision_constraints_no_obstacles(self):
+        """Test collision constraints with no obstacles."""
+        N = 5
+        states = np.zeros((N + 1, 6))
+        states[:, 0] = np.linspace(0, 10, N + 1)
+        controls = np.zeros((N, 4))
+        controls[:, 3] = 10.0  # Hover thrust
+        
+        z = pack_decision_vars(states, controls, N)
+        violations = collision_constraints_optimized(z, N, obstacles=[])
+        
+        # No obstacles = no violations
+        self.assertEqual(len(violations), 0)
+
+    def test_collision_constraints_with_sphere(self):
+        """Test collision constraints detect sphere collision."""
+        N = 5
+        states = np.zeros((N + 1, 6))
+        states[:, 0] = np.linspace(0, 10, N + 1)  # x from 0 to 10
+        states[:, 1] = 5  # y = 5
+        states[:, 2] = 5  # z = 5
+        controls = np.zeros((N, 4))
+        controls[:, 3] = 10.0
+        
+        # Obstacle at (5, 5, 5) - directly in path
+        obstacles = [helpers.SphereObstacle(center=[5, 5, 5], radius=1.0, name="Test")]
+        
+        z = pack_decision_vars(states, controls, N)
+        violations = collision_constraints_optimized(z, N, obstacles, subsample=1)
+        
+        # Should have some positive violations (collision)
+        self.assertTrue(np.any(violations > 0))
+
+    # TODO 28 Test
+    def test_initialize_from_rrt_basic(self):
+        """Test RRT initialization produces valid decision vector."""
+        # Create simple RRT path
+        rrt_path = [
+            gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(0, 0, 0)),
+            gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(2, 2, 2)),
+            gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(5, 5, 5)),
+            gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(8, 8, 8)),
+            gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(10, 10, 10))
+        ]
+        N = 10
+        dt = 0.1
+        start_pose = rrt_path[0]
+        
+        z = initialize_from_rrt_robust(rrt_path, N, dt, start_pose)
+        
+        # Check vector size
+        expected_size = 6 * (N + 1) + 4 * N  # states + controls
+        self.assertEqual(len(z), expected_size)
+        
+        # Unpack and verify
+        states, controls = unpack_decision_vars(z, N)
+        
+        # Check shapes
+        self.assertEqual(states.shape, (N + 1, 6))
+        self.assertEqual(controls.shape, (N, 4))
+        
+        # Check start position matches
+        np.testing.assert_array_almost_equal(states[0, :3], [0, 0, 0], decimal=2)
+        
+        # Check end position is interpolated correctly
+        np.testing.assert_array_almost_equal(states[N, :3], [10, 10, 10], decimal=2)
+
+    def test_initialize_controls_bounded(self):
+        """Test that initialized controls are within bounds."""
+        rrt_path = [
+            gtsam.Pose3(gtsam.Rot3.Ypr(0, 0, 0), gtsam.Point3(0, 0, 0)),
+            gtsam.Pose3(gtsam.Rot3.Ypr(0.5, 0.3, 0.2), gtsam.Point3(5, 5, 5)),
+            gtsam.Pose3(gtsam.Rot3.Ypr(1.0, 0.5, 0.3), gtsam.Point3(10, 10, 10))
+        ]
+        N = 10
+        dt = 0.1
+        start_pose = rrt_path[0]
+        
+        z = initialize_from_rrt_robust(rrt_path, N, dt, start_pose)
+        states, controls = unpack_decision_vars(z, N)
+        
+        # Check angular controls bounded
+        deg_to_rad = np.pi / 180
+        self.assertTrue(np.all(controls[:, 0:3] >= -10 * deg_to_rad))
+        self.assertTrue(np.all(controls[:, 0:3] <= 10 * deg_to_rad))
+        
+        # Check thrust bounded
+        self.assertTrue(np.all(controls[:, 3] >= 5))
+        self.assertTrue(np.all(controls[:, 3] <= 20))
 
 if __name__ == "__main__":
     unittest.main()
